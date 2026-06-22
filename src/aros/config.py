@@ -24,10 +24,24 @@ class ResearchAgentConfig:
 
 @dataclass
 class SearchEngineConfig:
-    algorithm: str = "bayesian_optimization"
+    algorithm: str = "iterative"
     experiments_per_hypothesis: int = 5
     max_concurrent: int = 3
     default_budget: int = 10
+    top_k_to_exploit: int = 3
+
+
+@dataclass
+class SearchSpaceConfig:
+    """Free-form parameter definitions loaded from YAML."""
+    parameters: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SearchSpaceConfig":
+        """Accept raw dict of parameter definitions."""
+        if not data:
+            return cls()
+        return cls(parameters=data)
 
 
 @dataclass
@@ -60,6 +74,8 @@ class LoopConfig:
     max_iterations: int = 0  # 0 = unlimited
     exploitation_ratio: float = 0.8
     exploration_ratio: float = 0.2
+    require_approval: bool = False
+    max_experiments_per_cycle: int = 20
 
 
 @dataclass
@@ -67,6 +83,7 @@ class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     research_agent: ResearchAgentConfig = field(default_factory=ResearchAgentConfig)
     search_engine: SearchEngineConfig = field(default_factory=SearchEngineConfig)
+    search_space: SearchSpaceConfig = field(default_factory=SearchSpaceConfig)
     experiment_runner: ExperimentRunnerConfig = field(default_factory=ExperimentRunnerConfig)
     evaluator: EvaluatorConfig = field(default_factory=EvaluatorConfig)
     dataset_registry: DatasetRegistryConfig = field(default_factory=DatasetRegistryConfig)
@@ -98,8 +115,10 @@ def _dict_to_dataclass(cls, data: dict, prefix: str = ""):
         env_key = f"{prefix}.{key}" if prefix else key
         if key in field_types:
             ftype = field_types[key]
-            # Check if the field type is itself a dataclass
-            if hasattr(ftype, "__dataclass_fields__") and isinstance(value, dict):
+            # SearchSpaceConfig is special — accept raw dict as parameters
+            if ftype is SearchSpaceConfig and isinstance(value, dict):
+                kwargs[key] = SearchSpaceConfig.from_dict(value)
+            elif hasattr(ftype, "__dataclass_fields__") and isinstance(value, dict):
                 kwargs[key] = _dict_to_dataclass(ftype, value, prefix=env_key)
             else:
                 kwargs[key] = _env_override(env_key, value)

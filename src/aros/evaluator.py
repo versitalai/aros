@@ -27,9 +27,10 @@ class Evaluator:
     def evaluate(self, experiment_id: str) -> ExperimentFeedback:
         """Run all benchmarks and produce feedback.
 
-        For the MVP, simulates benchmark scores based on training metrics.
-        Better training loss → slightly better scores. Random variation
-        makes it realistic.
+        Benchmark scores are derived from actual training metrics:
+        - training_loss directly maps to score (lower loss = higher score)
+        - forgetting_index penalizes scores
+        - Scores vary deterministically by config fingerprint
         """
         exp = self.db.get_experiment(experiment_id)
         if exp is None:
@@ -40,22 +41,33 @@ class Evaluator:
                 notes="Experiment not found",
             )
 
-        # Deterministic seed based on experiment config
-        config_hash = hash(str(exp.config.to_dict() if exp.config else "")) % (2**31)
-        rng = random.Random(config_hash)
+        fp = exp.config.fingerprint() if exp.config else experiment_id
+        rng = random.Random(hash(fp) % (2**31))
 
         training_loss = exp.metrics.get("training_loss", 1.0)
         val_loss = exp.metrics.get("validation_loss", 1.2)
+        forgetting = exp.metrics.get("forgetting_index", 0.3)
 
-        # Compute baseline from training quality
-        baseline = 65.0  # Default baseline score
-        quality_boost = (2.0 - training_loss) * 10  # Lower loss = higher boost
-        quality_boost = max(-5, min(20, quality_boost))
+        # Lower training_loss → higher scores
+        quality_boost = max(-10, min(25, (2.0 - training_loss) * 12))
 
-        # Run visible benchmarks
+        # Forgetting index directly penalizes (especially planning)
+        forgetting_penalty = forgetting * 8
+
+        baseline = 68.0
+
+        # Run visible benchmarks — each responds differently to forgetting
         visible_results = []
         for bm_name in self.visible_benchmarks:
-            score = baseline + quality_boost + rng.uniform(-3.0, 5.0)
+            if bm_name == "planning":
+                # Planning is hit hardest by forgetting
+                score = baseline + quality_boost - forgetting_penalty + rng.uniform(-2.0, 4.0)
+            elif bm_name == "coding":
+                # Coding moderately affected
+                score = baseline + quality_boost - forgetting_penalty * 0.5 + rng.uniform(-3.0, 5.0)
+            else:
+                # Agent tasks least affected
+                score = baseline + quality_boost - forgetting_penalty * 0.3 + rng.uniform(-2.5, 4.5)
             score = max(30.0, min(100.0, score))
             delta = rng.uniform(-2.0, 3.0)
 
@@ -66,10 +78,10 @@ class Evaluator:
             ))
             self.db.save_benchmark_result(experiment_id, visible_results[-1], is_hidden=False)
 
-        # Run hidden benchmarks (store but don't expose in feedback)
+        # Run hidden benchmarks — more sensitive to forgetting
         hidden_results = []
         for bm_name in self.hidden_benchmarks:
-            score = baseline + quality_boost * 0.8 + rng.uniform(-4.0, 3.0)
+            score = baseline + quality_boost * 0.7 - forgetting_penalty * 1.2 + rng.uniform(-3.0, 3.0)
             score = max(30.0, min(100.0, score))
 
             hidden_results.append(BenchmarkResult(

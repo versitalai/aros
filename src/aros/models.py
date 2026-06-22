@@ -41,6 +41,9 @@ class Hypothesis:
     confidence: float
     reasoning: str
     is_exploration: bool = False
+    budget_spent: int = 0
+    budget_total: int = 10
+    best_score: Optional[float] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_dict(self) -> dict:
@@ -106,6 +109,12 @@ class ExperimentConfig:
             "extras": self.extras,
         }
 
+    def fingerprint(self) -> str:
+        """Deterministic hash of config values for deduplication."""
+        import hashlib
+        raw = str(sorted(self.to_dict().items()))
+        return hashlib.md5(raw.encode()).hexdigest()
+
 
 @dataclass
 class BenchmarkResult:
@@ -156,6 +165,7 @@ class Experiment:
     metrics: dict = field(default_factory=dict)
     resource_usage: dict = field(default_factory=dict)
     feedback: Optional[ExperimentFeedback] = None
+    config_fingerprint: Optional[str] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: Optional[datetime] = None
@@ -203,6 +213,7 @@ class DatasetInfo:
     avg_length: int = 0  # tokens
     source: str = "unknown"
     is_synthetic: bool = False
+    path: Optional[str] = None
     metadata: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:

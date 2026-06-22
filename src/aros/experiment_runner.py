@@ -17,40 +17,59 @@ from .models import Experiment, ExperimentConfig
 
 
 class SimulatedTrainer:
-    """Simulates training to produce realistic-looking metrics.
+    """Simulates training to produce metrics that respond to config changes.
 
-    Given a config, produces:
-    - Training loss: starts high, decreases with more epochs
-    - Validation loss: similar but slightly higher
-    - Forgetting index: increases with more parameter updates
-    - Benchmark improvements: small positive effects from most configs
+    Key behaviors:
+    - Learning rate: optimal ~5e-5, too high or too low degrades
+    - Epochs: more epochs = lower loss but more forgetting
+    - LoRA rank: higher rank = more capacity but more forgetting
+    - Batch size: moderate batch sizes ideal, extremes degrade
+    - Deterministic per config fingerprint
     """
 
     def simulate(self, config: ExperimentConfig) -> dict:
         """Run simulated training and return metrics."""
-        rng = random.Random(hash(str(config.to_dict())) % (2**31))
+        fp = config.fingerprint() if config else "default"
+        rng = random.Random(hash(fp) % (2**31))
 
-        base_train_loss = 2.0
-        base_val_loss = 2.2
+        # Learning rate: sweet spot around 5e-5, degrades on either side
+        log_lr = math.log10(config.learning_rate) if config.learning_rate > 0 else -5
+        lr_score = 1.0 - abs(log_lr - (-4.3)) / 2.5
+        lr_score = max(0.1, min(1.0, lr_score))
 
-        # Better params = lower loss
-        lr_quality = 1.0 - abs(math.log10(config.learning_rate) - 4.5) / 2.0
-        lr_quality = max(0.3, min(1.0, lr_quality))
+        # Epochs: more is better for loss, worse for forgetting
+        epoch_norm = min(1.0, config.epochs / 5.0)
 
-        # More epochs = more training but more forgetting
-        epoch_factor = min(1.0, config.epochs / 5.0)
+        # LoRA rank: higher = more capacity, more forgetting
+        rank_norm = min(1.0, config.lora_rank / 64.0)
 
-        train_loss = base_train_loss * (0.8 - 0.3 * lr_quality) * (0.9 ** epoch_factor) + rng.uniform(-0.05, 0.05)
-        val_loss = train_loss * (1.0 + 0.1 * lr_quality) + rng.uniform(-0.03, 0.03)
+        # Batch size: moderate is ideal
+        bs_norm = abs(math.log2(config.batch_size) - 4.5) / 2.5
+        bs_score = max(0.3, 1.0 - bs_norm)
 
-        # Forgetting index: higher with more aggressive training
-        forgetting = 0.1 + 0.3 * epoch_factor + 0.2 * (1.0 - lr_quality)
+        # Combined training quality
+        quality = 0.5 * lr_score + 0.2 * epoch_norm + 0.15 * rank_norm + 0.15 * bs_score
+        quality = max(0.2, min(1.0, quality))
+
+        # Loss decreases with quality and epochs
+        train_loss = 2.5 - 1.5 * quality - 0.3 * epoch_norm
+        train_loss = round(train_loss + rng.uniform(-0.08, 0.08), 4)
+        train_loss = max(0.3, train_loss)
+
+        val_loss = round(train_loss * (1.05 + 0.05 * (1.0 - quality)) + rng.uniform(-0.05, 0.05), 4)
+        val_loss = max(0.3, val_loss)
+
+        # Forgetting: higher with more epochs and higher rank
+        forgetting = 0.1 + 0.4 * epoch_norm + 0.3 * rank_norm - 0.1 * lr_score
         forgetting += rng.uniform(-0.05, 0.05)
         forgetting = max(0.0, min(1.0, forgetting))
 
-        # GPU hours: scales with epochs, batch size, rank
-        gpu_hours = config.epochs * 0.5 * (1.0 + config.lora_rank / 32.0) * (16.0 / config.batch_size)
-        gpu_hours = round(gpu_hours + rng.uniform(-0.2, 0.2), 2)
+        # GPU hours
+        gpu_hours = round(
+            config.epochs * 0.5 * (1.0 + config.lora_rank / 32.0) * (16.0 / config.batch_size)
+            + rng.uniform(-0.2, 0.2),
+            2
+        )
 
         return {
             "training_loss": round(train_loss, 4),

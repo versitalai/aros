@@ -61,6 +61,7 @@ class ExperimentDB:
                     metrics_json TEXT DEFAULT '{}',
                     resource_usage_json TEXT DEFAULT '{}',
                     feedback_json TEXT,
+                    config_fingerprint TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     completed_at TEXT,
@@ -74,6 +75,9 @@ class ExperimentDB:
                     confidence REAL NOT NULL,
                     reasoning TEXT NOT NULL,
                     is_exploration INTEGER DEFAULT 0,
+                    budget_spent INTEGER DEFAULT 0,
+                    budget_total INTEGER DEFAULT 10,
+                    best_score REAL,
                     created_at TEXT NOT NULL
                 );
 
@@ -89,6 +93,7 @@ class ExperimentDB:
                     avg_length INTEGER DEFAULT 0,
                     source TEXT DEFAULT 'unknown',
                     is_synthetic INTEGER DEFAULT 0,
+                    path TEXT,
                     metadata_json TEXT DEFAULT '{}'
                 );
 
@@ -105,6 +110,7 @@ class ExperimentDB:
                 CREATE INDEX IF NOT EXISTS idx_experiments_status ON experiments(status);
                 CREATE INDEX IF NOT EXISTS idx_experiments_hypothesis ON experiments(hypothesis_id);
                 CREATE INDEX IF NOT EXISTS idx_benchmarks_experiment ON benchmark_results(experiment_id);
+                CREATE INDEX IF NOT EXISTS idx_experiments_fingerprint ON experiments(config_fingerprint);
             """)
             self._log("Tables created/verified")
 
@@ -117,8 +123,8 @@ class ExperimentDB:
                 """INSERT INTO experiments
                    (id, status, hypothesis_id, config_json, results_json,
                     metrics_json, resource_usage_json, feedback_json,
-                    created_at, updated_at, completed_at, human_comment)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    created_at, updated_at, completed_at, human_comment, config_fingerprint)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     experiment.id,
                     experiment.status.value,
@@ -132,6 +138,7 @@ class ExperimentDB:
                     experiment.updated_at.isoformat(),
                     experiment.completed_at.isoformat() if experiment.completed_at else None,
                     experiment.human_comment,
+                    experiment.config.fingerprint() if experiment.config else None,
                 ),
             )
             self._log(f"Created experiment: {experiment.id}")
@@ -155,7 +162,7 @@ class ExperimentDB:
                    status = ?, config_json = ?, results_json = ?,
                    metrics_json = ?, resource_usage_json = ?,
                    feedback_json = ?, updated_at = ?,
-                   completed_at = ?, human_comment = ?
+                   completed_at = ?, human_comment = ?, config_fingerprint = ?
                    WHERE id = ?""",
                 (
                     experiment.status.value,
@@ -167,6 +174,7 @@ class ExperimentDB:
                     experiment.updated_at.isoformat(),
                     experiment.completed_at.isoformat() if experiment.completed_at else None,
                     experiment.human_comment,
+                    experiment.config.fingerprint() if experiment.config else None,
                     experiment.id,
                 ),
             )
@@ -210,6 +218,7 @@ class ExperimentDB:
             metrics=json.loads(row["metrics_json"]) if row["metrics_json"] else {},
             resource_usage=json.loads(row["resource_usage_json"]) if row["resource_usage_json"] else {},
             feedback=self._parse_feedback_json(row["feedback_json"]),
+            config_fingerprint=row["config_fingerprint"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
             completed_at=datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
@@ -255,8 +264,9 @@ class ExperimentDB:
         with self._conn() as conn:
             conn.execute(
                 """INSERT OR REPLACE INTO hypotheses
-                   (id, description, target_region_json, confidence, reasoning, is_exploration, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (id, description, target_region_json, confidence, reasoning, is_exploration,
+                    budget_spent, budget_total, best_score, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     hypothesis.id,
                     hypothesis.description,
@@ -264,6 +274,9 @@ class ExperimentDB:
                     hypothesis.confidence,
                     hypothesis.reasoning,
                     int(hypothesis.is_exploration),
+                    hypothesis.budget_spent,
+                    hypothesis.budget_total,
+                    hypothesis.best_score,
                     hypothesis.created_at.isoformat(),
                 ),
             )
@@ -311,8 +324,8 @@ class ExperimentDB:
             conn.execute(
                 """INSERT OR REPLACE INTO datasets
                    (id, name, type, num_examples, quality_score, novelty_score,
-                    overlap_pct, topics_json, avg_length, source, is_synthetic, metadata_json)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    overlap_pct, topics_json, avg_length, source, is_synthetic, metadata_json, path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     dataset.id,
                     dataset.name,
@@ -326,6 +339,7 @@ class ExperimentDB:
                     dataset.source,
                     int(dataset.is_synthetic),
                     json.dumps(dataset.metadata),
+                    dataset.path,
                 ),
             )
             return dataset.id
@@ -356,6 +370,7 @@ class ExperimentDB:
             avg_length=row["avg_length"],
             source=row["source"],
             is_synthetic=bool(row["is_synthetic"]),
+            path=row["path"],
             metadata=json.loads(row["metadata_json"]) if row["metadata_json"] else {},
         )
 
@@ -384,3 +399,12 @@ class ExperimentDB:
                 )
                 for r in rows
             ]
+
+    def get_experiments_by_fingerprint(self, fingerprint: str) -> list[Experiment]:
+        """Find experiments with a matching config fingerprint (for dedup)."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM experiments WHERE config_fingerprint = ?",
+                (fingerprint,),
+            ).fetchall()
+            return [self._row_to_experiment(r) for r in rows]

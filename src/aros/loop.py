@@ -38,6 +38,10 @@ class AROSLoop:
         # Seed some default datasets if registry is empty
         self._seed_datasets()
 
+    def _has_budget(self, hypothesis) -> bool:
+        """Check if a hypothesis still has budget remaining."""
+        return hypothesis.budget_spent < (hypothesis.budget_total or self.config.search_engine.default_budget)
+
     def _seed_datasets(self):
         """Register default datasets if the registry is empty."""
         datasets = self.db.list_datasets()
@@ -121,23 +125,48 @@ class AROSLoop:
         # 3. SEARCH — convert hypotheses to experiment configs
         print(f"\n[3/7] Search — expanding hypotheses into experiments...")
         all_configs = []
+        total_configs = 0
         for hyp in hypotheses:
             self.db.save_hypothesis(hyp)
+            if not self._has_budget(hyp):
+                print(f"  ⏭️  Skipping {hyp.id[:12]} (budget exhausted: {hyp.budget_spent}/{hyp.budget_total})")
+                continue
             configs = self.search_engine.expand_hypothesis(hyp)
+            skipped = 0
             for cfg in configs:
+                fp = cfg.fingerprint()
+                existing = self.db.get_experiments_by_fingerprint(fp)
+                if existing:
+                    skipped += 1
+                    continue
                 exp = Experiment(
-                    id=f"exp_{self._iteration}_{hyp.id[:8]}_{len(all_configs)}",
+                    id=f"exp_{self._iteration}_{hyp.id[:8]}_{total_configs}",
                     hypothesis_id=hyp.id,
                     config=cfg,
+                    config_fingerprint=fp,
                 )
                 self.db.create_experiment(exp)
                 all_configs.append(exp)
+                total_configs += 1
+
+                if len(all_configs) >= self.config.loop.max_experiments_per_cycle:
+                    break
+
+            if skipped:
+                print(f"  (skipped {skipped} duplicate configs for {hyp.id[:12]})")
 
         print(f"  Created {len(all_configs)} experiment configurations")
 
         for exp in all_configs:
             exp.transition(ExperimentStatus.APPROVED)
             self.db.update_experiment(exp)
+
+        # Check for manual approval gate
+        if self.config.loop.require_approval and all_configs:
+            print(f"\n  🛑 Approval required for {len(all_configs)} experiments")
+            print(f"  Set loop.require_approval=false in config to auto-approve")
+            print(f"  Skipping execution this cycle")
+            return None
 
         # 4. EXECUTE — run the experiments (simulated)
         print(f"\n[4/7] Execute — running {len(all_configs)} experiments (simulated)...")
@@ -183,15 +212,47 @@ class AROSLoop:
         # 6. STORE — already done by evaluator
         print(f"\n[6/7] Store — all results saved to database")
 
-        # 7. LEARN — check generalization
-        print(f"\n[7/7] Learn — checking generalization...")
-        completed = self.db.list_experiments(status=ExperimentStatus.COMPLETED, limit=5)
-        for exp in completed:
-            alerts = self.generalization_monitor.check_alert_conditions(exp.id)
-            if alerts:
-                for alert in alerts:
-                    print(f"  ⚠️  Alert: {alert}")
-        print(f"  No generalization issues detected")
+        # 7. LEARN — check generalization, summarize cycle, update exploration balance
+        print(f"\n[7/7] Learn — analyzing results...")
+        completed = self.db.list_experiments(status=ExperimentStatus.COMPLETED, limit=20)
+
+        if completed:
+            # Check generalization for last few experiments
+            alert_count = 0
+            for exp in completed[:5]:
+                alerts = self.generalization_monitor.check_alert_conditions(exp.id)
+                if alerts:
+                    alert_count += len(alerts)
+                    for alert in alerts:
+                        print(f"  ⚠️  {alert}")
+
+            if alert_count == 0:
+                print(f"  ✓ No generalization issues detected")
+
+            # Summarize best experiment this cycle
+            scored = []
+            for exp in completed:
+                if exp.feedback and exp.feedback.benchmark_results:
+                    avg = sum(r.score for r in exp.feedback.benchmark_results) / len(exp.feedback.benchmark_results)
+                    scored.append((avg, exp))
+            if scored:
+                best_avg, best_exp = max(scored, key=lambda x: x[0])
+                print(f"  Best: {best_exp.id} (avg {best_avg:.1f})")
+                if best_exp.config:
+                    print(f"    config: lr={best_exp.config.learning_rate:.0e}, "
+                          f"epochs={best_exp.config.epochs}, rank={best_exp.config.lora_rank}")
+
+            # Check if autonomy should be paused
+            if self.generalization_monitor.should_pause_autonomy():
+                print(f"  🛑 CRITICAL: Autonomy should be paused — generalization regressing")
+            else:
+                print(f"  ✓ Autonomy status: safe to continue")
+
+        # Check budget exhaustion on active hypotheses
+        active_hyps = self.db.list_hypotheses(limit=20)
+        exhausted = [h for h in active_hyps if h.budget_spent >= h.budget_total]
+        if exhausted:
+            print(f"  Budget exhausted for {len(exhausted)} hypotheses")
 
         if evaluating:
             return evaluating[-1].id

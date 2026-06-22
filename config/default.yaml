@@ -1,5 +1,4 @@
 # AROS Default Configuration
-# Override any value via AROS_<SECTION>_<KEY> environment variables
 
 database:
   path: "data/experiments.db"
@@ -10,18 +9,53 @@ research_agent:
   provider: "ollama"
   temperature: 0.7
   max_history_experiments: 10
-  exploration_threshold: 0.3  # fraction of proposals that should be exploratory
+  exploration_threshold: 0.3
+
+search_space:
+  learning_rate:
+    type: "float"
+    min: 0.00001
+    max: 0.0005
+    num_values: 5
+    log_scale: true
+  lora_rank:
+    type: "int"
+    min: 4
+    max: 64
+    num_values: 4
+  lora_alpha:
+    type: "int"
+    min: 8
+    max: 64
+    num_values: 4
+  batch_size:
+    type: "int"
+    values: [8, 16, 32]
+  epochs:
+    type: "int"
+    values: [2, 3, 5]
+  weight_decay:
+    type: "float"
+    min: 0.0
+    max: 0.1
+    num_values: 3
+  warmup_ratio:
+    type: "float"
+    min: 0.0
+    max: 0.2
+    num_values: 3
 
 search_engine:
-  algorithm: "bayesian_optimization"
+  algorithm: "iterative"
   experiments_per_hypothesis: 5
   max_concurrent: 3
   default_budget: 10
+  top_k_to_exploit: 3
 
 experiment_runner:
   max_retries: 2
   timeout_hours: 24
-  checkpoint_frequency: 100  # steps
+  checkpoint_frequency: 100
   default_epochs: 3
   default_lora_rank: 16
   default_lora_alpha: 32
@@ -39,10 +73,12 @@ evaluator:
 dataset_registry:
   max_datasets: 100
   min_quality_score: 5.0
-  synthetic_cap: 0.5  # max fraction of training data from synthetic sources
+  synthetic_cap: 0.5
 
 loop:
   sleep_seconds: 60
-  max_iterations: 0  # 0 = unlimited
+  max_iterations: 0
   exploitation_ratio: 0.8
   exploration_ratio: 0.2
+  require_approval: false
+  max_experiments_per_cycle: 20

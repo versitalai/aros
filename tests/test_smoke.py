@@ -25,7 +25,7 @@ class TestConfig:
         assert isinstance(cfg, Config)
         assert cfg.database.path == "data/experiments.db"
         assert cfg.research_agent.model == "llama3.2:3b"
-        assert cfg.search_engine.algorithm == "bayesian_optimization"
+        assert cfg.search_engine.algorithm == "iterative"
         assert cfg.loop.exploitation_ratio == 0.8
         assert cfg.loop.exploration_ratio == 0.2
 
@@ -354,7 +354,7 @@ class TestComponents:
         cfg.database.path = str(tmp_path / "test.db")
         db = ExperimentDB(cfg)
         engine = SearchEngine(cfg, db)
-        assert engine.algorithm == "bayesian_optimization"
+        assert engine.algorithm == "iterative"
         # Pass a real hypothesis to expand
         hyp = Hypothesis(id="test", description="test", target_region={}, confidence=0.5, reasoning="test")
         configs = engine.expand_hypothesis(hyp)
