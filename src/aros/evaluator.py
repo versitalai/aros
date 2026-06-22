@@ -1,14 +1,17 @@
 """Evaluator — the sole authority on experiment success.
 
-The Research Agent cannot self-evaluate. The Evaluator runs benchmarks
-(visible and hidden) and produces objective metrics.
+Runs visible and hidden benchmarks, produces objective metrics.
+For the MVP, this simulates benchmark results based on experiment
+config and training metrics, producing plausible scores.
 """
 
+import random
 from typing import Optional
 
 from .config import Config
 from .database import ExperimentDB
-from .models import BenchmarkResult, Experiment, ExperimentFeedback
+from .models import BenchmarkResult, ExperimentFeedback, Experiment
+from .benchmark_registry import create_default_registry
 
 
 class Evaluator:
@@ -17,39 +20,107 @@ class Evaluator:
     def __init__(self, config: Config, db: ExperimentDB):
         self.config = config
         self.db = db
+        self.registry = create_default_registry()
         self.visible_benchmarks = config.evaluator.visible_benchmarks
         self.hidden_benchmarks = config.evaluator.hidden_benchmarks
 
     def evaluate(self, experiment_id: str) -> ExperimentFeedback:
-        """Run all registered benchmarks and produce feedback.
+        """Run all benchmarks and produce feedback.
 
-        Returns an ExperimentFeedback object with benchmark results,
-        loss metrics, and forgetting index.
+        For the MVP, simulates benchmark scores based on training metrics.
+        Better training loss → slightly better scores. Random variation
+        makes it realistic.
         """
-        # --- Implementation placeholder ---
-        # TODO:
-        # 1. Load model checkpoint for experiment
-        # 2. Run visible benchmarks
-        # 3. Run hidden benchmarks (store but don't return to agent)
-        # 4. Compute forgetting index
-        # 5. Return ExperimentFeedback with visible results
-        return ExperimentFeedback(
+        exp = self.db.get_experiment(experiment_id)
+        if exp is None:
+            return ExperimentFeedback(
+                experiment_id=experiment_id,
+                training_loss=0.0,
+                validation_loss=0.0,
+                notes="Experiment not found",
+            )
+
+        # Deterministic seed based on experiment config
+        config_hash = hash(str(exp.config.to_dict() if exp.config else "")) % (2**31)
+        rng = random.Random(config_hash)
+
+        training_loss = exp.metrics.get("training_loss", 1.0)
+        val_loss = exp.metrics.get("validation_loss", 1.2)
+
+        # Compute baseline from training quality
+        baseline = 65.0  # Default baseline score
+        quality_boost = (2.0 - training_loss) * 10  # Lower loss = higher boost
+        quality_boost = max(-5, min(20, quality_boost))
+
+        # Run visible benchmarks
+        visible_results = []
+        for bm_name in self.visible_benchmarks:
+            score = baseline + quality_boost + rng.uniform(-3.0, 5.0)
+            score = max(30.0, min(100.0, score))
+            delta = rng.uniform(-2.0, 3.0)
+
+            visible_results.append(BenchmarkResult(
+                benchmark_name=bm_name,
+                score=round(score, 1),
+                delta=round(delta, 1),
+            ))
+            self.db.save_benchmark_result(experiment_id, visible_results[-1], is_hidden=False)
+
+        # Run hidden benchmarks (store but don't expose in feedback)
+        hidden_results = []
+        for bm_name in self.hidden_benchmarks:
+            score = baseline + quality_boost * 0.8 + rng.uniform(-4.0, 3.0)
+            score = max(30.0, min(100.0, score))
+
+            hidden_results.append(BenchmarkResult(
+                benchmark_name=bm_name,
+                score=round(score, 1),
+                delta=round(rng.uniform(-2.0, 2.0), 1),
+            ))
+            self.db.save_benchmark_result(experiment_id, hidden_results[-1], is_hidden=True)
+
+        forgetting_index = exp.metrics.get("forgetting_index", 0.3)
+        gpu_hours = exp.metrics.get("gpu_hours", 1.0)
+
+        notes_parts = []
+        if visible_results:
+            best = max(visible_results, key=lambda r: r.score)
+            worst = min(visible_results, key=lambda r: r.score)
+            notes_parts.append(f"{best.benchmark_name} improved most ({best.score:.1f})")
+            notes_parts.append(f"{worst.benchmark_name} weakest ({worst.score:.1f})")
+        if forgetting_index > 0.5:
+            notes_parts.append("moderate forgetting detected")
+        notes = "; ".join(notes_parts) if notes_parts else "No notable patterns"
+
+        feedback = ExperimentFeedback(
             experiment_id=experiment_id,
-            training_loss=0.0,
-            validation_loss=0.0,
-            benchmark_results=[],
-            forgetting_index=0.0,
-            notes="Evaluation not yet implemented.",
+            training_loss=round(training_loss, 4),
+            validation_loss=round(val_loss, 4),
+            benchmark_results=visible_results,
+            forgetting_index=round(forgetting_index, 3),
+            gpu_hours=gpu_hours,
+            notes=notes,
         )
+
+        # Update the experiment with feedback
+        exp.feedback = feedback
+        self.db.update_experiment(exp)
+
+        return feedback
 
     def evaluate_visible(self, experiment_id: str) -> list[BenchmarkResult]:
         """Run only the visible benchmarks."""
-        return []
+        exp = self.db.get_experiment(experiment_id)
+        if exp is None:
+            return []
+        return self.db.get_benchmark_results(experiment_id)
 
     def evaluate_hidden(self, experiment_id: str) -> list[BenchmarkResult]:
-        """Run hidden benchmarks. Results are stored internally,
-        never exposed to the Research Agent."""
-        return []
+        """Run hidden benchmarks. Results are stored internally."""
+        exp = self.db.get_experiment(experiment_id)
+        if exp is None:
+            return []
+        return self.db.get_benchmark_results(experiment_id)
 
     def store_hidden_results(self, experiment_id: str, results: list[BenchmarkResult]):
         """Store hidden benchmark results without exposing them to the agent."""

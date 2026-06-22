@@ -6,11 +6,11 @@ database:
   echo: false
 
 research_agent:
-  model: "gemma-4-12b"
-  provider: "local"
+  model: "llama3.2:3b"
+  provider: "ollama"
   temperature: 0.7
-  max_history_experiments: 50
-  exploration_threshold: 0.2  # fraction of proposals that should be exploratory
+  max_history_experiments: 10
+  exploration_threshold: 0.3  # fraction of proposals that should be exploratory
 
 search_engine:
   algorithm: "bayesian_optimization"

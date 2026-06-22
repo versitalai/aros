@@ -34,9 +34,12 @@ to the next phase.
 
 ## Phase 4 — Research Agent ✅ / ❌
 - [ ] `analyze_history()` returns recent experiments
-- [ ] `propose_hypotheses()` returns list (initially empty)
+- [ ] `propose_hypotheses()` returns list of `Hypothesis` from LLM
+- [ ] Calls Ollama (`llama3.2:3b`) and parses JSON response
+- [ ] Handles ````json``` markdown fences in LLM output
+- [ ] Returns empty list on LLM error gracefully
 - [ ] `explain_reasoning()` returns text from DB hypothesis
-- [ ] *Integration:* `propose_hypotheses()` calls LLM and returns real hypotheses
+- [ ] *Integration:* Running `aros --once` produces real hypotheses with reasoning
 
 ## Phase 5 — Search Engine ✅ / ❌
 - [ ] `expand_hypothesis()` returns list of `ExperimentConfig`

@@ -24,7 +24,7 @@ class TestConfig:
         cfg = load_config()
         assert isinstance(cfg, Config)
         assert cfg.database.path == "data/experiments.db"
-        assert cfg.research_agent.model == "gemma-4-12b"
+        assert cfg.research_agent.model == "llama3.2:3b"
         assert cfg.search_engine.algorithm == "bayesian_optimization"
         assert cfg.loop.exploitation_ratio == 0.8
         assert cfg.loop.exploration_ratio == 0.2
@@ -331,7 +331,7 @@ class TestDatabase:
 
 class TestComponents:
     def test_research_agent_instantiation(self, tmp_path):
-        """Research Agent instantiates and returns empty hypotheses list."""
+        """Research Agent instantiates with correct model."""
         from aros.config import Config
         from aros.database import ExperimentDB
         from aros.research_agent import ResearchAgent
@@ -341,20 +341,24 @@ class TestComponents:
         db = ExperimentDB(cfg)
         agent = ResearchAgent(cfg, db)
         assert agent.model == "gemma-4-12b"
-        assert agent.propose_hypotheses() == []
+        assert agent.ollama_url == "http://localhost:11434/api/chat"
 
     def test_search_engine_instantiation(self, tmp_path):
         """Search Engine instantiates with correct algorithm."""
         from aros.config import Config
         from aros.database import ExperimentDB
         from aros.search_engine import SearchEngine
+        from aros.models import Hypothesis
 
         cfg = Config()
         cfg.database.path = str(tmp_path / "test.db")
         db = ExperimentDB(cfg)
         engine = SearchEngine(cfg, db)
         assert engine.algorithm == "bayesian_optimization"
-        assert engine.expand_hypothesis(None) == []
+        # Pass a real hypothesis to expand
+        hyp = Hypothesis(id="test", description="test", target_region={}, confidence=0.5, reasoning="test")
+        configs = engine.expand_hypothesis(hyp)
+        assert len(configs) == cfg.search_engine.experiments_per_hypothesis
 
     def test_evaluator_instantiation(self, tmp_path):
         """Evaluator instantiates with benchmark lists."""
@@ -422,10 +426,17 @@ class TestLoopExecution:
         cfg = Config()
         cfg.database.path = str(tmp_path / "test_cycle.db")
         loop = AROSLoop(cfg)
+
+        # Monkey-patch to avoid real LLM call in tests
+        original_propose = loop.research_agent.propose_hypotheses
+        loop.research_agent.propose_hypotheses = lambda *a, **kw: []
+
         result = loop.run_one_cycle()
-        # Currently returns None since hypotheses list is empty
-        # (Research Agent is not yet connected to an LLM)
+        # Returns None since hypotheses list is empty
         assert result is None or isinstance(result, str)
+
+        # Restore
+        loop.research_agent.propose_hypotheses = original_propose
 
     def test_loop_does_not_crash(self, tmp_path):
         """Running multiple cycles doesn't crash."""
@@ -437,8 +448,14 @@ class TestLoopExecution:
         cfg.loop.sleep_seconds = 0  # Don't actually sleep in tests
         loop = AROSLoop(cfg)
 
+        # Monkey-patch to avoid real LLM call in tests
+        original_propose = loop.research_agent.propose_hypotheses
+        loop.research_agent.propose_hypotheses = lambda *a, **kw: []
+
         for _ in range(3):
             loop.run_one_cycle()
 
         experiments = loop.db.list_experiments()
         assert isinstance(experiments, list)
+
+        loop.research_agent.propose_hypotheses = original_propose
