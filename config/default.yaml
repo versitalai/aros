@@ -1,0 +1,48 @@
+# AROS Default Configuration
+# Override any value via AROS_<SECTION>_<KEY> environment variables
+
+database:
+  path: "data/experiments.db"
+  echo: false
+
+research_agent:
+  model: "gemma-4-12b"
+  provider: "local"
+  temperature: 0.7
+  max_history_experiments: 50
+  exploration_threshold: 0.2  # fraction of proposals that should be exploratory
+
+search_engine:
+  algorithm: "bayesian_optimization"
+  experiments_per_hypothesis: 5
+  max_concurrent: 3
+  default_budget: 10
+
+experiment_runner:
+  max_retries: 2
+  timeout_hours: 24
+  checkpoint_frequency: 100  # steps
+  default_epochs: 3
+  default_lora_rank: 16
+  default_lora_alpha: 32
+
+evaluator:
+  visible_benchmarks:
+    - "coding"
+    - "planning"
+    - "agent_tasks"
+  hidden_benchmarks:
+    - "generalization"
+    - "robustness"
+  evaluation_batch_size: 32
+
+dataset_registry:
+  max_datasets: 100
+  min_quality_score: 5.0
+  synthetic_cap: 0.5  # max fraction of training data from synthetic sources
+
+loop:
+  sleep_seconds: 60
+  max_iterations: 0  # 0 = unlimited
+  exploitation_ratio: 0.8
+  exploration_ratio: 0.2
